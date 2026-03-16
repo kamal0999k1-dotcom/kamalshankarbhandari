@@ -69,7 +69,7 @@ export default function App() {
         setIsTransferOpen(false);
         setUsername('');
         setAmount('');
-      }, 2000);
+      }, 3000);
       return () => clearTimeout(timer);
     }
   }, [showDetails]);
@@ -135,21 +135,6 @@ export default function App() {
             >
               Withdraw
             </motion.button>
-          </div>
-
-          <div className="space-y-4">
-            <div className="flex justify-between items-start text-sm">
-              <div className="text-gray-600">
-                Daily withdrawal limit<br />
-                (Remain/Total)
-              </div>
-              <div className="font-semibold">$100/$100</div>
-            </div>
-            
-            <button className="flex items-center text-[#FE2C55] text-sm font-semibold hover:opacity-80 transition-opacity">
-              How to increase withdrawal limit?
-              <ChevronRight className="w-4 h-4 ml-0.5" />
-            </button>
           </div>
         </div>
 
