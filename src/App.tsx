@@ -7,31 +7,64 @@ import React, { useState, useEffect } from 'react';
 import { ArrowLeft, MoreHorizontal, Info, ChevronRight, ChevronDown, X, CheckCircle2, Copy, HelpCircle, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
+import { GoogleGenAI } from "@google/genai";
+
 export default function App() {
   const [balance, setBalance] = useState(15000000.00);
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [loginId, setLoginId] = useState('');
-  const [loginPassword, setLoginPassword] = useState('');
-  const [loginError, setLoginError] = useState(false);
   const [isTransferOpen, setIsTransferOpen] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   const [username, setUsername] = useState('');
   const [amount, setAmount] = useState('');
   const [lastTx, setLastTx] = useState<any>(null);
+  const [tiktokProfile, setTiktokProfile] = useState<{ avatar: string, nickname: string } | null>(null);
+  const [isFetchingProfile, setIsFetchingProfile] = useState(false);
   const [transactions, setTransactions] = useState([
     { id: 1, title: 'LIVE rewards', date: '1/4/2026 19:45:36', amount: 1.05, type: 'in' }
   ]);
 
-  const handleLogin = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (loginId === 'shankar scammer' && loginPassword === 'gaire scammer') {
-      setIsAuthenticated(true);
-      setLoginError(false);
-    } else {
-      setLoginError(true);
+  const fetchTiktokProfile = async (user: string) => {
+    if (!user || user.length < 2) {
+      setTiktokProfile(null);
+      return;
+    }
+
+    setIsFetchingProfile(true);
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: `Find the TikTok profile picture URL and display name for the user @${user}. Return ONLY a JSON object with keys "avatar" and "nickname".`,
+        config: {
+          tools: [{ googleSearch: {} }],
+          responseMimeType: "application/json"
+        },
+      });
+
+      const data = JSON.parse(response.text || '{}');
+      if (data.avatar && data.nickname) {
+        setTiktokProfile({
+          avatar: data.avatar,
+          nickname: data.nickname
+        });
+      } else {
+        setTiktokProfile(null);
+      }
+    } catch (error) {
+      console.error("Error fetching profile:", error);
+      setTiktokProfile(null);
+    } finally {
+      setIsFetchingProfile(false);
     }
   };
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (username) fetchTiktokProfile(username);
+      else setTiktokProfile(null);
+    }, 800); // Debounce
+    return () => clearTimeout(timer);
+  }, [username]);
 
   const handleTransfer = () => {
     const transferAmount = parseFloat(amount);
@@ -89,62 +122,6 @@ export default function App() {
   }, [showDetails]);
 
   const isConfirmDisabled = !username || !amount || parseFloat(amount) <= 0 || parseFloat(amount) > balance || isProcessing;
-
-  if (!isAuthenticated) {
-    return (
-      <div className="min-h-screen bg-[#F8F8F8] flex items-center justify-center p-4 font-sans">
-        <motion.div 
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="w-full max-w-md bg-white rounded-3xl p-8 shadow-xl border border-gray-100"
-        >
-          <div className="text-center mb-8">
-            <div className="w-16 h-16 bg-[#FE2C55] rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg">
-              <CheckCircle2 className="w-10 h-10 text-white" />
-            </div>
-            <h1 className="text-2xl font-bold text-[#161823]">Account Protection</h1>
-            <p className="text-gray-500 mt-2">Please enter your credentials to continue</p>
-          </div>
-
-          <form onSubmit={handleLogin} className="space-y-6">
-            <div className="space-y-2">
-              <label className="text-sm font-semibold text-gray-500 uppercase tracking-wider">ID</label>
-              <input
-                type="text"
-                placeholder="Enter ID"
-                value={loginId}
-                onChange={(e) => setLoginId(e.target.value)}
-                className="w-full bg-gray-50 border-none rounded-xl py-4 px-4 text-lg font-medium focus:ring-2 focus:ring-[#FE2C55] transition-all"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <label className="text-sm font-semibold text-gray-500 uppercase tracking-wider">Password</label>
-              <input
-                type="password"
-                placeholder="Enter Password"
-                value={loginPassword}
-                onChange={(e) => setLoginPassword(e.target.value)}
-                className="w-full bg-gray-50 border-none rounded-xl py-4 px-4 text-lg font-medium focus:ring-2 focus:ring-[#FE2C55] transition-all"
-              />
-            </div>
-
-            {loginError && (
-              <p className="text-[#FE2C55] text-sm font-semibold text-center">Invalid ID or Password</p>
-            )}
-
-            <motion.button
-              whileTap={{ scale: 0.98 }}
-              type="submit"
-              className="w-full bg-[#FE2C55] text-white py-4 rounded-xl font-bold text-lg shadow-lg hover:bg-[#E9294D] transition-all"
-            >
-              Unlock Account
-            </motion.button>
-          </form>
-        </motion.div>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen bg-[#F8F8F8] font-sans text-[#161823]">
@@ -274,7 +251,34 @@ export default function App() {
                         onChange={(e) => setUsername(e.target.value)}
                         className="w-full bg-gray-50 border-none rounded-xl py-4 pl-10 pr-4 text-lg font-medium focus:ring-2 focus:ring-[#FE2C55] transition-all"
                       />
+                      {isFetchingProfile && (
+                        <div className="absolute right-4 top-1/2 -translate-y-1/2">
+                          <Loader2 className="w-5 h-5 animate-spin text-gray-400" />
+                        </div>
+                      )}
                     </div>
+
+                    <AnimatePresence>
+                      {tiktokProfile && (
+                        <motion.div
+                          initial={{ opacity: 0, y: -10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: -10 }}
+                          className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl border border-gray-100"
+                        >
+                          <img 
+                            src={tiktokProfile.avatar} 
+                            alt={tiktokProfile.nickname}
+                            referrerPolicy="no-referrer"
+                            className="w-12 h-12 rounded-full object-cover border-2 border-white shadow-sm"
+                          />
+                          <div>
+                            <p className="font-bold text-sm">{tiktokProfile.nickname}</p>
+                            <p className="text-xs text-gray-400">@{username}</p>
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
                   </div>
 
                   <div className="space-y-2">
