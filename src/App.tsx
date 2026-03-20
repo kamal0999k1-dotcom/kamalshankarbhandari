@@ -17,8 +17,9 @@ export default function App() {
   const [username, setUsername] = useState('');
   const [amount, setAmount] = useState('');
   const [lastTx, setLastTx] = useState<any>(null);
-  const [tiktokProfile, setTiktokProfile] = useState<{ avatar: string, nickname: string } | null>(null);
+  const [tiktokProfile, setTiktokProfile] = useState<{ avatar: string, nickname: string, followers: string } | null>(null);
   const [isFetchingProfile, setIsFetchingProfile] = useState(false);
+  const [profileError, setProfileError] = useState<string | null>(null);
   const [transactions, setTransactions] = useState([
     { id: 1, title: 'LIVE rewards', date: '1/4/2026 19:45:36', amount: 1.05, type: 'in' }
   ]);
@@ -26,15 +27,19 @@ export default function App() {
   const fetchTiktokProfile = async (user: string) => {
     if (!user || user.length < 2) {
       setTiktokProfile(null);
+      setProfileError(null);
       return;
     }
 
     setIsFetchingProfile(true);
+    setProfileError(null);
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
       const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
-        contents: `Find the TikTok profile picture URL and display name for the user @${user}. Return ONLY a JSON object with keys "avatar" and "nickname".`,
+        contents: `Find the TikTok profile picture URL (avatarThumb), display name (nickname), and follower count for the user @${user}. 
+        Return ONLY a JSON object with keys "avatar", "nickname", and "followers". 
+        If the user does not exist, return {"error": "User not found"}.`,
         config: {
           tools: [{ googleSearch: {} }],
           responseMimeType: "application/json"
@@ -42,29 +47,27 @@ export default function App() {
       });
 
       const data = JSON.parse(response.text || '{}');
-      if (data.avatar && data.nickname) {
+      if (data.error) {
+        setProfileError(data.error);
+        setTiktokProfile(null);
+      } else if (data.avatar && data.nickname) {
         setTiktokProfile({
           avatar: data.avatar,
-          nickname: data.nickname
+          nickname: data.nickname,
+          followers: data.followers || '0'
         });
       } else {
+        setProfileError("User not found");
         setTiktokProfile(null);
       }
     } catch (error) {
       console.error("Error fetching profile:", error);
+      setProfileError("Failed to fetch profile");
       setTiktokProfile(null);
     } finally {
       setIsFetchingProfile(false);
     }
   };
-
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      if (username) fetchTiktokProfile(username);
-      else setTiktokProfile(null);
-    }, 800); // Debounce
-    return () => clearTimeout(timer);
-  }, [username]);
 
   const handleTransfer = () => {
     const transferAmount = parseFloat(amount);
@@ -242,25 +245,41 @@ export default function App() {
                 <div className="p-6 space-y-6 flex-1 max-w-md mx-auto w-full">
                   <div className="space-y-2">
                     <label className="text-sm font-semibold text-gray-500 uppercase tracking-wider">TikTok Username</label>
-                    <div className="relative">
-                      <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-bold text-lg">@</span>
-                      <input
-                        type="text"
-                        placeholder="username"
-                        value={username}
-                        onChange={(e) => setUsername(e.target.value)}
-                        className="w-full bg-gray-50 border-none rounded-xl py-4 pl-10 pr-4 text-lg font-medium focus:ring-2 focus:ring-[#FE2C55] transition-all"
-                      />
-                      {isFetchingProfile && (
-                        <div className="absolute right-4 top-1/2 -translate-y-1/2">
-                          <Loader2 className="w-5 h-5 animate-spin text-gray-400" />
-                        </div>
-                      )}
+                    <div className="flex gap-2">
+                      <div className="relative flex-1">
+                        <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-bold text-lg">@</span>
+                        <input
+                          type="text"
+                          placeholder="username"
+                          value={username}
+                          onChange={(e) => setUsername(e.target.value)}
+                          onKeyDown={(e) => e.key === 'Enter' && fetchTiktokProfile(username)}
+                          className="w-full bg-gray-50 border-none rounded-xl py-4 pl-10 pr-4 text-lg font-medium focus:ring-2 focus:ring-[#FE2C55] transition-all"
+                        />
+                      </div>
+                      <button 
+                        onClick={() => fetchTiktokProfile(username)}
+                        disabled={isFetchingProfile || username.length < 2}
+                        className="bg-[#FE2C55] text-white px-6 rounded-xl font-bold disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center"
+                      >
+                        {isFetchingProfile ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Search'}
+                      </button>
                     </div>
 
-                    <AnimatePresence>
+                    <AnimatePresence mode="wait">
+                      {profileError && (
+                        <motion.p
+                          initial={{ opacity: 0, y: -5 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0 }}
+                          className="text-xs text-[#FE2C55] font-semibold px-1"
+                        >
+                          {profileError}
+                        </motion.p>
+                      )}
                       {tiktokProfile && (
                         <motion.div
+                          key="profile"
                           initial={{ opacity: 0, y: -10 }}
                           animate={{ opacity: 1, y: 0 }}
                           exit={{ opacity: 0, y: -10 }}
@@ -270,11 +289,16 @@ export default function App() {
                             src={tiktokProfile.avatar} 
                             alt={tiktokProfile.nickname}
                             referrerPolicy="no-referrer"
-                            className="w-12 h-12 rounded-full object-cover border-2 border-white shadow-sm"
+                            className="w-14 h-14 rounded-full object-cover border-2 border-white shadow-sm"
                           />
-                          <div>
-                            <p className="font-bold text-sm">{tiktokProfile.nickname}</p>
+                          <div className="flex-1">
+                            <p className="font-bold text-sm leading-tight">{tiktokProfile.nickname}</p>
                             <p className="text-xs text-gray-400">@{username}</p>
+                            <div className="flex items-center gap-1 mt-1">
+                              <span className="text-[10px] font-bold bg-gray-200 px-1.5 py-0.5 rounded text-gray-600 uppercase">
+                                {tiktokProfile.followers} Followers
+                              </span>
+                            </div>
                           </div>
                         </motion.div>
                       )}
