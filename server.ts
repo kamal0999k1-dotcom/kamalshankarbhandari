@@ -48,9 +48,9 @@ async function startServer() {
       // Prioritize the ones most likely to work with tiktok-scraper7
       const endpoints = [
         `https://${apiHost}/user/info?unique_id=${username}`,
-        `https://${apiHost}/user/details?unique_id=${username}`,
-        `https://${apiHost}/api/user/info?uniqueId=${username}`,
-        `https://${apiHost}/user/info?username=${username}`
+        `https://${apiHost}/user/info?uniqueId=${username}`,
+        `https://${apiHost}/api/user/info?unique_id=${username}`,
+        `https://${apiHost}/user/details?unique_id=${username}`
       ];
       
       const fetchWithTimeout = async (url: string) => {
@@ -66,24 +66,43 @@ async function startServer() {
             },
             signal: controller.signal
           });
+          
+          const text = await response.text();
           clearTimeout(timeoutId);
+          
+          let data;
+          try {
+            data = JSON.parse(text);
+          } catch (e) {
+            console.log(`Failed to parse JSON from ${url}`);
+            throw new Error("Invalid JSON");
+          }
+
           if (response.ok) {
-            const data = await response.json();
-            console.log(`Success from ${url}`);
-            // Check if data is valid and has some user info
-            if (data && (data.user || data.data || data.userInfo || data.avatarThumb || data.nickname)) {
+            console.log(`Success response from ${url}`);
+            
+            // tiktok-scraper7 often returns data in a 'data' field or directly
+            const userData = data.data?.user || data.user || data.data || data.userInfo || data;
+            
+            // Check if we actually got user info
+            if (userData && (userData.uniqueId || userData.unique_id || userData.nickname || userData.nickname || userData.avatarThumb)) {
               return data;
             }
+            
             // Check for common error fields in 200 responses
-            if (data && (data.error || data.message || data.msg || data.code !== undefined)) {
-              console.log(`API returned 200 but with error in body from ${url}:`, data.error || data.message || data.msg);
+            const errorMsg = data.error || data.message || data.msg || data.description;
+            if (errorMsg) {
+              console.log(`API returned 200 but with error in body from ${url}: ${errorMsg}`);
             }
+          } else {
+            console.log(`Failed response from ${url}: ${response.status} - ${text.slice(0, 100)}`);
           }
-          console.log(`Failed response from ${url}: ${response.status}`);
-          throw new Error("Failed");
+          throw new Error("Failed to find user data");
         } catch (e: any) {
           clearTimeout(timeoutId);
-          console.log(`Error/Timeout fetching from ${url}: ${e.message}`);
+          if (e.name !== 'AbortError') {
+            console.log(`Error fetching from ${url}: ${e.message}`);
+          }
           throw e;
         }
       };
@@ -114,14 +133,14 @@ async function startServer() {
       }
 
       // Map the RapidAPI response to our app's expected format
-      // Extremely broad mapping to catch any possible field name
-      const userData = data.user || data.data?.user || data.data || data.userInfo?.user || data.userInfo || data;
-      const statsData = data.stats || data.user?.stats || data.data?.stats || data.userInfo?.stats || userData;
+      // tiktok-scraper7 structure: data.user.uniqueId, data.user.nickname, data.user.avatarThumb
+      const userData = data.data?.user || data.user || data.data || data.userInfo?.user || data.userInfo || data;
+      const statsData = data.data?.stats || data.stats || data.user?.stats || data.userInfo?.stats || userData;
 
       const profile = {
         avatar: userData.avatarThumb || userData.avatar_thumb || userData.avatar || userData.avatarMedium || userData.avatar_medium || userData.avatarLarger || userData.avatar_larger || "",
-        nickname: userData.nickname || userData.nickName || userData.display_name || userData.uniqueId || username,
-        followers: (statsData.followerCount || statsData.follower_count || statsData.followers || 0).toLocaleString()
+        nickname: userData.nickname || userData.nickName || userData.display_name || userData.uniqueId || userData.unique_id || username,
+        followers: (statsData.followerCount || statsData.follower_count || statsData.followers || statsData.follower_count || 0).toLocaleString()
       };
 
       if (!profile.avatar) {
