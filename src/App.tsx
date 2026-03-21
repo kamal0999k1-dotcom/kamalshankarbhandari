@@ -59,29 +59,44 @@ export default function App() {
     
     try {
       let data = null;
+      let actualError = null;
       
       // 1. Try the local server API (Optimized for speed)
       try {
         const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout for the whole request
         
-        const response = await fetch(`/api/tiktok/profile?username=${encodeURIComponent(user)}`, { signal: controller.signal });
+        // Ensure we use the full URL with https if possible, or relative
+        const apiUrl = `/api/tiktok/profile?username=${encodeURIComponent(user)}`;
+        
+        const response = await fetch(apiUrl, { 
+          signal: controller.signal,
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+          }
+        });
         clearTimeout(timeoutId);
         
         if (response.ok) {
           data = await response.json();
         } else {
-          const errData = await response.json();
-          setProfileError(errData.error || "User not found");
+          const errText = await response.text();
+          try {
+            const errData = JSON.parse(errText);
+            actualError = errData.error || `Server responded with ${response.status}`;
+          } catch (e) {
+            actualError = `Server error ${response.status}: ${errText.slice(0, 50)}`;
+          }
+          setProfileError(actualError);
         }
       } catch (e: any) {
         if (e.name === 'AbortError') {
           console.log("Request aborted (new search or timeout)");
-          // If it was a timeout (not a manual abort from a new search), show error
-          // We can check if the controller is still the active one
-          return; // Don't set error for aborted requests
+          setProfileError("Search timed out (15s). The TikTok API might be slow.");
+          return;
         }
+        actualError = e.message || "Unknown error";
         console.error("Local API error:", e);
-        setProfileError("Search timed out or failed. Try again.");
+        setProfileError(`Error: ${actualError}`);
       }
 
       if (data && data.avatar) {

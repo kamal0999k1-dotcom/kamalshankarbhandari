@@ -39,6 +39,13 @@ async function startServer() {
     const apiKey = process.env.X_RAPIDAPI_KEY;
     const apiHost = process.env.X_RAPIDAPI_HOST;
 
+    const USER_AGENTS = [
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+      "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1"
+    ];
+
     if (!apiKey || !apiHost) {
       return res.status(500).json({ error: "RapidAPI credentials not configured" });
     }
@@ -53,58 +60,78 @@ async function startServer() {
         `https://${apiHost}/user/details?unique_id=${username}`
       ];
       
-      const fetchWithTimeout = async (url: string) => {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s per individual fetch
-        try {
-          console.log(`Fetching profile from: ${url}`);
-          const response = await fetch(url, {
-            method: "GET",
-            headers: {
-              "x-rapidapi-key": apiKey,
-              "x-rapidapi-host": apiHost,
-            },
-            signal: controller.signal
-          });
+      const fetchWithTimeout = async (url: string, retries = 1) => {
+        const userAgent = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+        
+        for (let attempt = 0; attempt <= retries; attempt++) {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 7000); // 7s per individual fetch to stay under Vercel's 10s limit
           
-          const text = await response.text();
-          clearTimeout(timeoutId);
-          
-          let data;
           try {
-            data = JSON.parse(text);
-          } catch (e) {
-            console.log(`Failed to parse JSON from ${url}`);
-            throw new Error("Invalid JSON");
-          }
+            if (attempt > 0) {
+              console.log(`Retry attempt ${attempt} for: ${url}`);
+              await new Promise(resolve => setTimeout(resolve, 300));
+            } else {
+              console.log(`Fetching profile from: ${url}`);
+            }
 
-          if (response.ok) {
-            console.log(`Success response from ${url}`);
+            const response = await fetch(url, {
+              method: "GET",
+              headers: {
+                "x-rapidapi-key": apiKey,
+                "x-rapidapi-host": apiHost,
+                "User-Agent": userAgent,
+                "Accept": "application/json",
+              },
+              signal: controller.signal
+            });
             
-            // tiktok-scraper7 often returns data in a 'data' field or directly
-            const userData = data.data?.user || data.user || data.data || data.userInfo || data;
+            const text = await response.text();
+            clearTimeout(timeoutId);
             
-            // Check if we actually got user info
-            if (userData && (userData.uniqueId || userData.unique_id || userData.nickname || userData.nickname || userData.avatarThumb)) {
-              return data;
+            let data;
+            try {
+              data = JSON.parse(text);
+            } catch (e) {
+              console.log(`Failed to parse JSON from ${url}: ${text.slice(0, 50)}`);
+              throw new Error(`Invalid JSON response from ${url}`);
+            }
+
+            if (response.ok) {
+              console.log(`Success response from ${url}`);
+              
+              const userData = data.data?.user || data.user || data.data || data.userInfo || data;
+              
+              if (userData && (userData.uniqueId || userData.unique_id || userData.nickname || userData.avatarThumb)) {
+                return data;
+              }
+              
+              const errorMsg = data.error || data.message || data.msg || data.description;
+              if (errorMsg) {
+                throw new Error(`API Error: ${errorMsg}`);
+              }
+            } else {
+              console.log(`Failed response from ${url}: ${response.status} - ${text.slice(0, 100)}`);
+              if (response.status === 404) throw new Error("User not found");
+              if (response.status === 429) throw new Error("Rate limit exceeded");
+              throw new Error(`API returned ${response.status}`);
             }
             
-            // Check for common error fields in 200 responses
-            const errorMsg = data.error || data.message || data.msg || data.description;
-            if (errorMsg) {
-              console.log(`API returned 200 but with error in body from ${url}: ${errorMsg}`);
+            if (attempt === retries) {
+              throw new Error("Max retries reached");
             }
-          } else {
-            console.log(`Failed response from ${url}: ${response.status} - ${text.slice(0, 100)}`);
+          } catch (e: any) {
+            clearTimeout(timeoutId);
+            if (e.name === 'AbortError') {
+              console.log(`Request timed out (7s) for ${url}`);
+              if (attempt === retries) throw new Error("Request timed out");
+            } else {
+              console.log(`Error fetching from ${url}: ${e.message}`);
+              if (attempt === retries) throw e;
+            }
           }
-          throw new Error("Failed to find user data");
-        } catch (e: any) {
-          clearTimeout(timeoutId);
-          if (e.name !== 'AbortError') {
-            console.log(`Error fetching from ${url}: ${e.message}`);
-          }
-          throw e;
         }
+        throw new Error("Failed after retries");
       };
 
       // Try all endpoints in parallel and take the FIRST successful one
