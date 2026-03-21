@@ -21,10 +21,15 @@ async function startServer() {
 
   // API Route for TikTok Profile Lookup via RapidAPI
   app.get("/api/tiktok/profile", async (req, res) => {
-    const { username } = req.query;
+    let { username } = req.query;
 
     if (!username || typeof username !== "string") {
       return res.status(400).json({ error: "Username is required" });
+    }
+
+    // Strip leading @ if present
+    if (username.startsWith("@")) {
+      username = username.slice(1);
     }
 
     // Check cache first
@@ -41,19 +46,20 @@ async function startServer() {
     }
 
     try {
-      // Try multiple common URL patterns for RapidAPI TikTok endpoints in parallel
+      // Prioritizing tiktok-api23 patterns for speed and reliability
+      // We only need ONE successful call, so we try the most likely ones first
       const endpoints = [
         `https://${apiHost}/api/user/info?uniqueId=${username}`,
+        `https://${apiHost}/api/user/details?uniqueId=${username}`,
         `https://${apiHost}/user/info?username=${username}`,
-        `https://${apiHost}/user/details?username=${username}`,
-        `https://${apiHost}/@${username}`,
-        `https://${apiHost}/user/profile?username=${username}`
+        `https://${apiHost}/user/details?username=${username}`
       ];
       
       const fetchWithTimeout = async (url: string) => {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 8000); // Increased to 8s to prevent frequent timeouts
+        const timeoutId = setTimeout(() => controller.abort(), 4000); // Further reduced to 4s for "real quick"
         try {
+          console.log(`Fetching: ${url}`);
           const response = await fetch(url, {
             method: "GET",
             headers: {
@@ -65,34 +71,70 @@ async function startServer() {
           clearTimeout(timeoutId);
           if (response.ok) {
             const data = await response.json();
-            if (data) return data;
+            // Check if we actually got user data
+            if (data && (data.userInfo || data.data || data.user)) return data;
           }
-          throw new Error("Failed");
+          throw new Error(`Failed with status: ${response.status}`);
         } catch (e) {
           clearTimeout(timeoutId);
           throw e;
         }
       };
 
-      // Try all endpoints in parallel and take the FIRST successful one (Promise.any)
+      // Try all endpoints in parallel and take the FIRST successful one
       let data;
       try {
         data = await Promise.any(endpoints.map(fetchWithTimeout));
       } catch (e) {
-        // All failed
-        return res.status(404).json({ error: "User not found on TikTok API" });
+        console.error("All endpoints failed for", username);
+        return res.status(404).json({ error: "User not found. Please check the username and try again." });
       }
 
       // Map the RapidAPI response to our app's expected format
-      const profile = {
-        avatar: data.avatarThumb || data.avatar || data.avatar_thumb || data.user?.avatarThumb || data.user?.avatar_thumb || data.user?.avatar || data.data?.avatarThumb || data.data?.user?.avatarThumb || data.userInfo?.user?.avatarThumb || data.userInfo?.user?.avatarMedium || "",
-        nickname: data.nickname || data.user?.nickname || data.data?.nickname || data.data?.user?.nickname || data.userInfo?.user?.nickname || username,
-        followers: (data.followerCount || data.follower_count || data.stats?.followerCount || data.user?.stats?.followerCount || data.user?.followerCount || data.data?.stats?.followerCount || data.data?.user?.stats?.followerCount || data.userInfo?.stats?.followerCount || 0).toLocaleString()
-      };
+      const userData = data.userInfo?.user || 
+                       data.data?.user || 
+                       data.user || 
+                       data.data || 
+                       data.userInfo || 
+                       data;
+      
+      const stats = data.userInfo?.stats || 
+                    data.data?.stats || 
+                    userData.stats || 
+                    data.stats || 
+                    {};
 
-      if (!profile.avatar) {
-        return res.status(404).json({ error: "User found but no profile picture available" });
-      }
+      const avatar = userData.avatarThumb || 
+                  userData.avatar_thumb || 
+                  userData.avatar || 
+                  userData.avatarMedium || 
+                  userData.avatar_medium || 
+                  data.avatarThumb || 
+                  data.avatar || 
+                  "";
+
+      const profile = {
+        avatar: avatar,
+        nickname: userData.nickname || 
+                  userData.nickname_name || 
+                  data.nickname || 
+                  username,
+        followers: (stats.followerCount || 
+                    stats.follower_count || 
+                    userData.followerCount || 
+                    userData.follower_count || 
+                    data.followerCount || 
+                    0).toLocaleString(),
+        following: (stats.followingCount || 
+                    stats.following_count || 
+                    userData.followingCount || 
+                    0).toLocaleString(),
+        hearts: (stats.heartCount || 
+                  stats.heart_count || 
+                  userData.heartCount || 
+                  0).toLocaleString(),
+        isReal: true
+      };
 
       // Store in cache
       profileCache.set(username.toLowerCase(), { data: profile, timestamp: Date.now() });

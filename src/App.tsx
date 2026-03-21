@@ -16,7 +16,14 @@ export default function App() {
   const [username, setUsername] = useState('');
   const [amount, setAmount] = useState('');
   const [lastTx, setLastTx] = useState<any>(null);
-  const [tiktokProfile, setTiktokProfile] = useState<{ avatar: string, nickname: string } | null>(null);
+  const [tiktokProfile, setTiktokProfile] = useState<{ 
+    avatar: string, 
+    nickname: string, 
+    followers?: string,
+    following?: string,
+    hearts?: string,
+    isReal?: boolean 
+  } | null>(null);
   const [isFetchingProfile, setIsFetchingProfile] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
   const [transactions, setTransactions] = useState([
@@ -38,7 +45,7 @@ export default function App() {
   }, [username]);
 
   const fetchTiktokProfile = async (user: string) => {
-    // Strip leading @ if present
+    // Strip leading @ if present for local state
     const cleanUsername = user.startsWith('@') ? user.slice(1) : user;
 
     if (!cleanUsername || cleanUsername.length < 2) {
@@ -51,141 +58,66 @@ export default function App() {
     setProfileError(null);
     
     try {
+      // 1. Try the server-side scraper first
+      const response = await fetch(`/api/tiktok/profile?username=${encodeURIComponent(cleanUsername)}`);
       let data = null;
       
-      // 1. Try direct RapidAPI call first (preferred for static hosts like Vercel/Netlify)
-      if (import.meta.env.VITE_X_RAPIDAPI_KEY) {
-        try {
-          const apiHost = import.meta.env.VITE_X_RAPIDAPI_HOST || "tiktok-scraper7.p.rapidapi.com";
-          const apiKey = import.meta.env.VITE_X_RAPIDAPI_KEY;
-          
-          // Try multiple common URL patterns for RapidAPI TikTok endpoints
-          const endpoints = [
-            `https://${apiHost}/api/user/info?uniqueId=${cleanUsername}`,
-            `https://${apiHost}/user/info?username=${cleanUsername}`,
-            `https://${apiHost}/user/details?username=${cleanUsername}`,
-            `https://${apiHost}/user/profile?username=${cleanUsername}`
-          ];
-
-          const fetchWithTimeout = async (url: string) => {
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 5000);
-            try {
-              console.log(`Fetching from: ${url}`);
-              const response = await fetch(url, {
-                headers: {
-                  "x-rapidapi-key": apiKey,
-                  "x-rapidapi-host": apiHost
-                },
-                signal: controller.signal
-              });
-              clearTimeout(timeoutId);
-              if (response.ok) {
-                const rawData = await response.json();
-                console.log("TikTok API Response:", rawData);
-                
-                // Extremely robust data mapping to handle various TikTok API response structures
-                const userData = rawData.user || 
-                                 rawData.data?.user || 
-                                 rawData.data || 
-                                 rawData.userInfo?.user || 
-                                 rawData.userInfo ||
-                                 rawData;
-
-                const avatar = userData.avatarThumb || 
-                               userData.avatar_thumb || 
-                               userData.avatar || 
-                               userData.avatarMedium || 
-                               userData.avatar_medium;
-
-                const nickname = userData.nickname || 
-                                 userData.nickname_name || 
-                                 cleanUsername;
-
-                if (avatar) {
-                  return {
-                    avatar: avatar,
-                    nickname: nickname
-                  };
-                }
-              }
-              throw new Error("Failed");
-            } catch (e) {
-              clearTimeout(timeoutId);
-              throw e;
-            }
-          };
-
-          // Try endpoints sequentially for direct browser calls to avoid rate limits
-          for (const endpoint of endpoints) {
-            try {
-              data = await fetchWithTimeout(endpoint);
-              if (data) break;
-            } catch (e) {
-              continue;
-            }
-          }
-        } catch (e) {
-          console.log("Direct RapidAPI call failed.");
-        }
+      if (response.ok) {
+        data = await response.json();
+        console.log("TikTok Profile Data (Scraper):", data);
       }
 
-      // 2. Fallback to local server API (if available)
-      if (!data) {
-        try {
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 3000);
-          
-          const response = await fetch(`/api/tiktok/profile?username=${cleanUsername}`, { signal: controller.signal });
-          clearTimeout(timeoutId);
-          
-          if (response.ok) {
-            data = await response.json();
-            console.log("Local API Response:", data);
-          }
-        } catch (e) {
-          console.log("Local API not available or timed out.");
-        }
-      }
-
-      // 3. Final Fallback: Gemini (works with VITE_GEMINI_API_KEY)
-      if (!data && import.meta.env.VITE_GEMINI_API_KEY) {
+      // 2. Fallback to Gemini if scraper failed OR found user but NO avatar
+      if ((!data || !data.avatar) && process.env.GEMINI_API_KEY) {
         console.log("Falling back to Gemini for profile lookup...");
-        const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
-        
-        const geminiResponse = await ai.models.generateContent({
-          model: "gemini-3-flash-preview",
-          contents: `Find the TikTok profile picture URL (avatarThumb) and display name (nickname) for the user @${cleanUsername}. 
-          Return ONLY a JSON object with keys "avatar" and "nickname".`,
-          config: {
-            tools: [{ googleSearch: {} }],
-            responseMimeType: "application/json"
-          },
-        });
-        
-        const geminiData = JSON.parse(geminiResponse.text || '{}');
-        console.log("Gemini Fallback Response:", geminiData);
-        if (geminiData.avatar) {
-          data = {
-            avatar: geminiData.avatar,
-            nickname: geminiData.nickname || cleanUsername
-          };
+        try {
+          const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+          const geminiResponse = await ai.models.generateContent({
+            model: "gemini-3-flash-preview",
+            contents: `Find the TikTok profile picture URL (avatar) and display name (nickname) for the user @${cleanUsername}. 
+            Return ONLY a JSON object with keys "avatar" and "nickname".`,
+            config: {
+              tools: [{ googleSearch: {} }],
+              responseMimeType: "application/json"
+            },
+          });
+          
+          const geminiData = JSON.parse(geminiResponse.text || '{}');
+          console.log("Gemini Fallback Response:", geminiData);
+          if (geminiData.avatar) {
+            data = {
+              avatar: geminiData.avatar,
+              nickname: geminiData.nickname || cleanUsername
+            };
+          }
+        } catch (geminiError) {
+          console.error("Gemini fallback failed:", geminiError);
         }
       }
 
+      // 3. Final Fallback: Placeholder avatar
       if (data && data.avatar) {
         setTiktokProfile({
           avatar: data.avatar,
-          nickname: data.nickname
+          nickname: data.nickname || cleanUsername,
+          followers: data.followers,
+          following: data.following,
+          hearts: data.hearts,
+          isReal: data.isReal
+        });
+      } else if (data || cleanUsername.length >= 2) {
+        // If we have a nickname but no avatar, or just a username, use a placeholder
+        setTiktokProfile({
+          avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(cleanUsername)}&background=FE2C55&color=fff&size=256`,
+          nickname: data?.nickname || cleanUsername,
+          isReal: false
         });
       } else {
         setProfileError("User not found");
-        setTiktokProfile(null);
       }
     } catch (error) {
-      console.error("Error fetching profile:", error);
-      setProfileError("Failed to fetch profile. Check your API keys.");
-      setTiktokProfile(null);
+      console.error("Profile fetch error:", error);
+      setProfileError("Could not connect to profile service");
     } finally {
       setIsFetchingProfile(false);
     }
@@ -266,7 +198,10 @@ export default function App() {
         <div className="flex p-4 gap-3">
           <button className="flex-1 bg-white rounded-lg p-3 shadow-sm border border-gray-100 text-center">
             <div className="text-sm font-semibold">Available rewards</div>
-            <div className="text-xs text-gray-500">US{balance.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
+            <div className="flex items-center justify-center gap-1">
+              <div className="text-xs text-gray-500">US{balance.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
+              <span className="px-1 py-0.5 bg-gray-100 text-gray-400 text-[7px] font-bold rounded uppercase">Simulated</span>
+            </div>
           </button>
           <button className="flex-1 bg-gray-50 rounded-lg p-3 text-center relative">
             <div className="text-sm font-semibold text-gray-400">Upcoming rewards</div>
@@ -427,10 +362,18 @@ export default function App() {
                             />
                           </div>
                           <div className="flex-1 min-w-0">
-                            <p className="font-bold text-base truncate text-gray-900">{tiktokProfile.nickname} 🌹</p>
+                            <div className="flex items-center gap-1.5">
+                              <p className="font-bold text-base truncate text-gray-900">{tiktokProfile.nickname} 🌹</p>
+                              {tiktokProfile.isReal && (
+                                <span className="px-1.5 py-0.5 bg-green-100 text-green-600 text-[8px] font-bold rounded-full uppercase tracking-wider">Real Data</span>
+                              )}
+                            </div>
                             <div className="flex justify-between items-center">
                               <p className="text-xs text-gray-400 truncate">@{username}</p>
-                              <p className="text-[10px] text-gray-400">110 followers</p>
+                              <div className="flex gap-2 text-[9px] text-gray-400 font-medium">
+                                <span>{tiktokProfile.followers || '0'} followers</span>
+                                {tiktokProfile.hearts && <span>• {tiktokProfile.hearts} likes</span>}
+                              </div>
                             </div>
                           </div>
                         </motion.div>
