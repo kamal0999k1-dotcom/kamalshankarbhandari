@@ -99,7 +99,25 @@ export default function App() {
         if (response.ok) {
           const contentType = response.headers.get("content-type");
           if (contentType && contentType.includes("application/json")) {
-            data = await response.json();
+            const rawData = await response.json();
+            console.log("API Response:", rawData);
+            
+            // Handle different API response structures
+            // 1. tiktok-api23.p.rapidapi.com / tiktok-scraper7 structure
+            const userData = rawData.data?.user || rawData.user || rawData.data || rawData.userInfo?.user || rawData.userInfo || rawData;
+            const statsData = rawData.data?.stats || rawData.stats || rawData.user?.stats || rawData.userInfo?.stats || userData;
+
+            if (userData && (userData.uniqueId || userData.unique_id || userData.nickname || userData.id)) {
+              data = {
+                avatar: userData.avatarLarger || userData.avatarMedium || userData.avatarThumb || userData.avatar_thumb || userData.avatar || "",
+                nickname: userData.nickname || userData.nickName || userData.display_name || userData.uniqueId || userData.unique_id || user,
+                followers: (statsData.followerCount || statsData.follower_count || statsData.followers || 0).toLocaleString()
+              };
+            } else {
+              console.error("Could not find user data in response:", rawData);
+              actualError = "User data not found in API response";
+              setProfileError(actualError);
+            }
           } else {
             const text = await response.text();
             console.error("Received non-JSON response:", text.slice(0, 100));
@@ -127,11 +145,12 @@ export default function App() {
         setProfileError(`Fetch Error: ${actualError}`);
       }
 
-      if (data && data.avatar) {
+      if (data && (data.avatar || data.nickname)) {
+        console.log("Setting TikTok Profile:", data);
         setTiktokProfile({
-          avatar: data.avatar,
-          nickname: data.nickname,
-          followers: data.followers
+          avatar: data.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(data.nickname || user)}&background=FE2C55&color=fff`,
+          nickname: data.nickname || user,
+          followers: data.followers || "0"
         });
       } else if (!profileError) {
         setTiktokProfile(null);
