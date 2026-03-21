@@ -68,22 +68,53 @@ export default function App() {
       // 2. If local API failed, try direct RapidAPI call (if VITE_ key is provided in Netlify)
       if (!data && import.meta.env.VITE_X_RAPIDAPI_KEY) {
         try {
-          const apiHost = import.meta.env.VITE_X_RAPIDAPI_HOST || "tiktok-all-in-one.p.rapidapi.com";
-          const directResponse = await fetch(`https://${apiHost}/api/user/info?uniqueId=${user}`, {
-            headers: {
-              "x-rapidapi-key": import.meta.env.VITE_X_RAPIDAPI_KEY,
-              "x-rapidapi-host": apiHost
+          const apiHost = import.meta.env.VITE_X_RAPIDAPI_HOST || "tiktok-scraper7.p.rapidapi.com";
+          const apiKey = import.meta.env.VITE_X_RAPIDAPI_KEY;
+          
+          // Try multiple common URL patterns for RapidAPI TikTok endpoints
+          const endpoints = [
+            `https://${apiHost}/api/user/info?uniqueId=${user}`,
+            `https://${apiHost}/user/info?username=${user}`,
+            `https://${apiHost}/user/details?username=${user}`,
+            `https://${apiHost}/user/profile?username=${user}`
+          ];
+
+          const fetchWithTimeout = async (url: string) => {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 5000);
+            try {
+              const response = await fetch(url, {
+                headers: {
+                  "x-rapidapi-key": apiKey,
+                  "x-rapidapi-host": apiHost
+                },
+                signal: controller.signal
+              });
+              clearTimeout(timeoutId);
+              if (response.ok) {
+                const rawData = await response.json();
+                const userData = rawData.user || rawData.data?.user || rawData.data || rawData.userInfo?.user || rawData;
+                if (userData.avatarThumb || userData.avatar_thumb || userData.avatar) {
+                  return {
+                    avatar: userData.avatarThumb || userData.avatar_thumb || userData.avatar,
+                    nickname: userData.nickname || user
+                  };
+                }
+              }
+              throw new Error("Failed");
+            } catch (e) {
+              clearTimeout(timeoutId);
+              throw e;
             }
-          });
-          if (directResponse.ok) {
-            const rawData = await directResponse.json();
-            // Handle different API response structures
-            const userData = rawData.user || rawData;
-            if (userData.avatarThumb || userData.avatar_thumb) {
-              data = {
-                avatar: userData.avatarThumb || userData.avatar_thumb,
-                nickname: userData.nickname || user
-              };
+          };
+
+          // Try endpoints sequentially for direct browser calls to avoid rate limits
+          for (const endpoint of endpoints) {
+            try {
+              data = await fetchWithTimeout(endpoint);
+              if (data) break;
+            } catch (e) {
+              continue;
             }
           }
         } catch (e) {
