@@ -49,6 +49,16 @@ export default function App() {
     setIsFetchingProfile(true);
     setProfileError(null);
     
+    // 1. Check for required configuration
+    const apiHost = import.meta.env.VITE_X_RAPIDAPI_HOST;
+    const apiKey = import.meta.env.VITE_X_RAPIDAPI_KEY;
+
+    if (!apiHost) {
+      setProfileError("API Configuration Missing");
+      setIsFetchingProfile(false);
+      return;
+    }
+    
     // Cancel any previous active request
     if (activeController) {
       activeController.abort();
@@ -61,42 +71,57 @@ export default function App() {
       let data = null;
       let actualError = null;
       
-      // 1. Try the local server API (Optimized for speed)
+      // Try the RapidAPI endpoint directly from client (with https)
       try {
-        const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout for the whole request
+        const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout
         
-        // Ensure we use the full URL with https if possible, or relative
-        const apiUrl = `/api/tiktok/profile?username=${encodeURIComponent(user)}`;
+        // Build URL using the host variable, ensuring https://
+        const baseUrl = apiHost.startsWith('http') ? apiHost : `https://${apiHost}`;
+        const apiUrl = `${baseUrl}/user/info?unique_id=${encodeURIComponent(user)}`;
         
+        console.log(`Fetching from: ${apiUrl}`);
+
         const response = await fetch(apiUrl, { 
           signal: controller.signal,
           headers: {
+            "x-rapidapi-key": apiKey || "",
+            "x-rapidapi-host": apiHost.replace(/^https?:\/\//, ''),
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
           }
         });
+        
         clearTimeout(timeoutId);
         
+        // CRITICAL: Check if response is OK before parsing JSON to avoid "Unexpected token <" (HTML)
         if (response.ok) {
-          data = await response.json();
+          const contentType = response.headers.get("content-type");
+          if (contentType && contentType.includes("application/json")) {
+            data = await response.json();
+          } else {
+            const text = await response.text();
+            console.error("Received non-JSON response:", text.slice(0, 100));
+            actualError = "Received invalid data format from API";
+            setProfileError(actualError);
+          }
         } else {
           const errText = await response.text();
           try {
             const errData = JSON.parse(errText);
-            actualError = errData.error || `Server responded with ${response.status}`;
+            actualError = errData.error || errData.message || `API Error ${response.status}`;
           } catch (e) {
-            actualError = `Server error ${response.status}: ${errText.slice(0, 50)}`;
+            actualError = `API Error ${response.status}: ${errText.slice(0, 50)}`;
           }
           setProfileError(actualError);
         }
       } catch (e: any) {
         if (e.name === 'AbortError') {
-          console.log("Request aborted (new search or timeout)");
-          setProfileError("Search timed out (15s). The TikTok API might be slow.");
+          console.log("Request aborted or timed out");
+          setProfileError("Search timed out (15s). The API might be slow.");
           return;
         }
         actualError = e.message || "Unknown error";
-        console.error("Local API error:", e);
-        setProfileError(`Error: ${actualError}`);
+        console.error("Fetch error:", e);
+        setProfileError(`Fetch Error: ${actualError}`);
       }
 
       if (data && data.avatar) {
