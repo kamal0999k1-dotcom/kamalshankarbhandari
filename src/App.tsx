@@ -46,21 +46,57 @@ export default function App() {
 
     setIsFetchingProfile(true);
     setProfileError(null);
-    // Don't clear profile immediately to keep UI stable while typing
+    
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout for the server call
-
-      const response = await fetch(`/api/tiktok/profile?username=${user}`, { signal: controller.signal });
-      clearTimeout(timeoutId);
+      let data = null;
       
-      if (!response.ok) {
-        // Fallback to Gemini if backend fails or user not found on RapidAPI
-        console.log("RapidAPI failed, falling back to Gemini...");
+      // 1. Try the local server API first (works in AI Studio / VPS)
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s timeout for local API
+        
+        const response = await fetch(`/api/tiktok/profile?username=${user}`, { signal: controller.signal });
+        clearTimeout(timeoutId);
+        
+        if (response.ok) {
+          data = await response.json();
+        }
+      } catch (e) {
+        console.log("Local API not available or timed out, trying fallbacks...");
+      }
+
+      // 2. If local API failed, try direct RapidAPI call (if VITE_ key is provided in Netlify)
+      if (!data && import.meta.env.VITE_X_RAPIDAPI_KEY) {
+        try {
+          const apiHost = import.meta.env.VITE_X_RAPIDAPI_HOST || "tiktok-all-in-one.p.rapidapi.com";
+          const directResponse = await fetch(`https://${apiHost}/api/user/info?uniqueId=${user}`, {
+            headers: {
+              "x-rapidapi-key": import.meta.env.VITE_X_RAPIDAPI_KEY,
+              "x-rapidapi-host": apiHost
+            }
+          });
+          if (directResponse.ok) {
+            const rawData = await directResponse.json();
+            // Handle different API response structures
+            const userData = rawData.user || rawData;
+            if (userData.avatarThumb || userData.avatar_thumb) {
+              data = {
+                avatar: userData.avatarThumb || userData.avatar_thumb,
+                nickname: userData.nickname || user
+              };
+            }
+          }
+        } catch (e) {
+          console.log("Direct RapidAPI call failed.");
+        }
+      }
+
+      // 3. Final Fallback: Gemini (works on Netlify with GEMINI_API_KEY)
+      if (!data) {
+        console.log("Falling back to Gemini for profile lookup...");
         const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
         
-        // Add a timeout to Gemini call to prevent long hangs
-        const geminiPromise = ai.models.generateContent({
+        const geminiResponse = await ai.models.generateContent({
           model: "gemini-3-flash-preview",
           contents: `Find the TikTok profile picture URL (avatarThumb) and display name (nickname) for the user @${user}. 
           Return ONLY a JSON object with keys "avatar" and "nickname".`,
@@ -69,42 +105,28 @@ export default function App() {
             responseMimeType: "application/json"
           },
         });
-
-        const timeoutPromise = new Promise((_, reject) => 
-          setTimeout(() => reject(new Error("Timeout")), 30000) // 30s for Gemini with search
-        );
-
-        const geminiResponse = await Promise.race([geminiPromise, timeoutPromise]) as any;
         
-        const data = JSON.parse(geminiResponse.text || '{}');
-        if (data.avatar) {
-          setTiktokProfile({
-            avatar: data.avatar,
-            nickname: data.nickname || user
-          });
-          return;
+        const geminiData = JSON.parse(geminiResponse.text || '{}');
+        if (geminiData.avatar) {
+          data = {
+            avatar: geminiData.avatar,
+            nickname: geminiData.nickname || user
+          };
         }
-
-        const errorData = await response.json().catch(() => ({}));
-        setProfileError(errorData.error || "User not found");
-        setTiktokProfile(null);
-        return;
       }
 
-      const data = await response.json();
-      setTiktokProfile({
-        avatar: data.avatar,
-        nickname: data.nickname
-      });
+      if (data && data.avatar) {
+        setTiktokProfile({
+          avatar: data.avatar,
+          nickname: data.nickname
+        });
+      } else {
+        setProfileError("User not found");
+        setTiktokProfile(null);
+      }
     } catch (error) {
       console.error("Error fetching profile:", error);
-      if (error instanceof Error && error.name === 'AbortError') {
-        setProfileError("Search timed out. Trying fallback...");
-        // Trigger fallback manually if the server call timed out
-        // For now, we'll just show the error.
-      } else {
-        setProfileError(error instanceof Error && error.message === "Timeout" ? "Search timed out. Try again." : "Failed to fetch profile");
-      }
+      setProfileError("Failed to fetch profile. Check your API keys.");
       setTiktokProfile(null);
     } finally {
       setIsFetchingProfile(false);
