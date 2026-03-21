@@ -16,39 +16,30 @@ export default function App() {
   const [username, setUsername] = useState('');
   const [amount, setAmount] = useState('');
   const [lastTx, setLastTx] = useState<any>(null);
-  const [tiktokProfile, setTiktokProfile] = useState<{ 
-    avatar: string, 
-    nickname: string, 
-    followers?: string,
-    following?: string,
-    hearts?: string,
-    isReal?: boolean 
-  } | null>(null);
+  const [tiktokProfile, setTiktokProfile] = useState<{ avatar: string, nickname: string, followers?: string } | null>(null);
   const [isFetchingProfile, setIsFetchingProfile] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
   const [transactions, setTransactions] = useState([
-    { id: 1, title: 'LIVE rewards', date: '1/4/2026 19:45:36', amount: 1.05, type: 'in' }
+    { id: 1, title: 'LIVE rewards', date: '1/4/2026 19:45:36', amount: 1.05, type: 'in', details: { status: 'Complete', method: 'TikTok', fee: 0.01, arrival: 'Instant', txId: 'TXN-99887766' } }
   ]);
 
   // Debounced profile fetch
   useEffect(() => {
     const timer = setTimeout(() => {
-      if (username.length >= 2) {
-        fetchTiktokProfile(username);
+      const sanitized = username.startsWith('@') ? username.slice(1) : username;
+      if (sanitized.length >= 2) {
+        fetchTiktokProfile(sanitized);
       } else {
         setTiktokProfile(null);
         setProfileError(null);
       }
-    }, 200); // Reduced from 400ms to 200ms for faster response
+    }, 400); // Increased slightly for better stability
 
     return () => clearTimeout(timer);
   }, [username]);
 
   const fetchTiktokProfile = async (user: string) => {
-    // Strip leading @ if present for local state
-    const cleanUsername = user.startsWith('@') ? user.slice(1) : user;
-
-    if (!cleanUsername || cleanUsername.length < 2) {
+    if (!user || user.length < 2) {
       setTiktokProfile(null);
       setProfileError(null);
       return;
@@ -58,66 +49,40 @@ export default function App() {
     setProfileError(null);
     
     try {
-      // 1. Try the server-side scraper first
-      const response = await fetch(`/api/tiktok/profile?username=${encodeURIComponent(cleanUsername)}`);
       let data = null;
       
-      if (response.ok) {
-        data = await response.json();
-        console.log("TikTok Profile Data (Scraper):", data);
-      }
-
-      // 2. Fallback to Gemini if scraper failed OR found user but NO avatar
-      if ((!data || !data.avatar) && process.env.GEMINI_API_KEY) {
-        console.log("Falling back to Gemini for profile lookup...");
-        try {
-          const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-          const geminiResponse = await ai.models.generateContent({
-            model: "gemini-3-flash-preview",
-            contents: `Find the TikTok profile picture URL (avatar) and display name (nickname) for the user @${cleanUsername}. 
-            Return ONLY a JSON object with keys "avatar" and "nickname".`,
-            config: {
-              tools: [{ googleSearch: {} }],
-              responseMimeType: "application/json"
-            },
-          });
-          
-          const geminiData = JSON.parse(geminiResponse.text || '{}');
-          console.log("Gemini Fallback Response:", geminiData);
-          if (geminiData.avatar) {
-            data = {
-              avatar: geminiData.avatar,
-              nickname: geminiData.nickname || cleanUsername
-            };
-          }
-        } catch (geminiError) {
-          console.error("Gemini fallback failed:", geminiError);
+      // 1. Try the local server API (Optimized for speed)
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 6000); // 6s timeout for the whole request
+        
+        const response = await fetch(`/api/tiktok/profile?username=${encodeURIComponent(user)}`, { signal: controller.signal });
+        clearTimeout(timeoutId);
+        
+        if (response.ok) {
+          data = await response.json();
+        } else {
+          const errData = await response.json();
+          setProfileError(errData.error || "User not found");
         }
+      } catch (e) {
+        console.log("Local API error or timeout");
+        setProfileError("Search timed out. Try again.");
       }
 
-      // 3. Final Fallback: Placeholder avatar
       if (data && data.avatar) {
         setTiktokProfile({
           avatar: data.avatar,
-          nickname: data.nickname || cleanUsername,
-          followers: data.followers,
-          following: data.following,
-          hearts: data.hearts,
-          isReal: data.isReal
+          nickname: data.nickname,
+          followers: data.followers
         });
-      } else if (data || cleanUsername.length >= 2) {
-        // If we have a nickname but no avatar, or just a username, use a placeholder
-        setTiktokProfile({
-          avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(cleanUsername)}&background=FE2C55&color=fff&size=256`,
-          nickname: data?.nickname || cleanUsername,
-          isReal: false
-        });
-      } else {
-        setProfileError("User not found");
+      } else if (!profileError) {
+        setTiktokProfile(null);
       }
     } catch (error) {
-      console.error("Profile fetch error:", error);
-      setProfileError("Could not connect to profile service");
+      console.error("Error fetching profile:", error);
+      setProfileError("Failed to fetch profile.");
+      setTiktokProfile(null);
     } finally {
       setIsFetchingProfile(false);
     }
@@ -155,7 +120,14 @@ export default function App() {
           title: `Transfer to @${username}`,
           date: txDetails.date,
           amount: transferAmount,
-          type: 'out'
+          type: 'out',
+          details: {
+            status: 'Withdrawal complete',
+            method: `TikTok(@${username})`,
+            fee: transferAmount * 0.006,
+            arrival: '30 Minutes in arrival',
+            txId: txDetails.id
+          }
         },
         ...prev
       ]);
@@ -165,20 +137,28 @@ export default function App() {
     }, 1000);
   };
 
-  // Auto-close details after 2 seconds
-  useEffect(() => {
-    if (showDetails) {
-      const timer = setTimeout(() => {
-        setShowDetails(false);
-        setIsTransferOpen(false);
-        setUsername('');
-        setAmount('');
-      }, 3000);
-      return () => clearTimeout(timer);
-    }
-  }, [showDetails]);
+  // Removed auto-close for details to allow user to read them
+  // useEffect(() => {
+  //   if (showDetails) {
+  //     const timer = setTimeout(() => {
+  //       setShowDetails(false);
+  //       setIsTransferOpen(false);
+  //       setUsername('');
+  //       setAmount('');
+  //     }, 3000);
+  //     return () => clearTimeout(timer);
+  //   }
+  // }, [showDetails]);
 
   const isConfirmDisabled = !username || !amount || parseFloat(amount) <= 0 || parseFloat(amount) > balance || isProcessing;
+
+  const getProxyUrl = (url: string) => {
+    if (!url) return "";
+    if (url.includes("tiktokcdn.com") || url.includes("tiktok.com") || url.includes("p16-sign") || url.includes("p77-sign")) {
+      return `/api/proxy-image?url=${encodeURIComponent(url)}`;
+    }
+    return url;
+  };
 
   return (
     <div className="min-h-screen bg-[#F8F8F8] font-sans text-[#161823]">
@@ -198,10 +178,7 @@ export default function App() {
         <div className="flex p-4 gap-3">
           <button className="flex-1 bg-white rounded-lg p-3 shadow-sm border border-gray-100 text-center">
             <div className="text-sm font-semibold">Available rewards</div>
-            <div className="flex items-center justify-center gap-1">
-              <div className="text-xs text-gray-500">US{balance.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
-              <span className="px-1 py-0.5 bg-gray-100 text-gray-400 text-[7px] font-bold rounded uppercase">Simulated</span>
-            </div>
+            <div className="text-xs text-gray-500">US{balance.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
           </button>
           <button className="flex-1 bg-gray-50 rounded-lg p-3 text-center relative">
             <div className="text-sm font-semibold text-gray-400">Upcoming rewards</div>
@@ -263,7 +240,22 @@ export default function App() {
 
             <div className="space-y-4">
               {transactions.map(tx => (
-                <div key={tx.id} className="flex justify-between items-center py-2 border-b border-gray-50 last:border-0">
+                <div 
+                  key={tx.id} 
+                  onClick={() => {
+                    if (tx.type === 'out') {
+                      setLastTx({
+                        id: tx.details?.txId || tx.id,
+                        username: tx.title.split('@')[1],
+                        amount: tx.amount,
+                        date: tx.date
+                      });
+                      setShowDetails(true);
+                      setIsTransferOpen(true);
+                    }
+                  }}
+                  className="flex justify-between items-center py-2 border-b border-gray-50 last:border-0 cursor-pointer hover:bg-gray-50 transition-colors"
+                >
                   <div>
                     <p className="font-semibold">{tx.title}</p>
                     <p className="text-xs text-gray-400">{tx.date}</p>
@@ -352,28 +344,22 @@ export default function App() {
                         >
                           <div className="w-12 h-12 rounded-full overflow-hidden border-2 border-white shadow-md flex-shrink-0 bg-gray-100">
                             <img 
-                              src={tiktokProfile.avatar} 
+                              src={getProxyUrl(tiktokProfile.avatar)} 
                               alt={tiktokProfile.nickname}
                               referrerPolicy="no-referrer"
                               className="w-full h-full object-cover"
                               onError={(e) => {
-                                (e.target as HTMLImageElement).src = `https://ui-avatars.com/api/?name=${encodeURIComponent(tiktokProfile.nickname)}&background=FE2C55&color=fff`;
+                                console.log("Image load failed, using fallback");
+                                (e.target as HTMLImageElement).src = `https://ui-avatars.com/api/?name=${encodeURIComponent(tiktokProfile.nickname)}&background=FE2C55&color=fff&size=128`;
+                                (e.target as HTMLImageElement).onerror = null; // Prevent infinite loop
                               }}
                             />
                           </div>
                           <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-1.5">
-                              <p className="font-bold text-base truncate text-gray-900">{tiktokProfile.nickname} 🌹</p>
-                              {tiktokProfile.isReal && (
-                                <span className="px-1.5 py-0.5 bg-green-100 text-green-600 text-[8px] font-bold rounded-full uppercase tracking-wider">Real Data</span>
-                              )}
-                            </div>
+                            <p className="font-bold text-base truncate text-gray-900">{tiktokProfile.nickname} 🌹</p>
                             <div className="flex justify-between items-center">
-                              <p className="text-xs text-gray-400 truncate">@{username}</p>
-                              <div className="flex gap-2 text-[9px] text-gray-400 font-medium">
-                                <span>{tiktokProfile.followers || '0'} followers</span>
-                                {tiktokProfile.hearts && <span>• {tiktokProfile.hearts} likes</span>}
-                              </div>
+                              <p className="text-xs text-gray-400 truncate">@{username.startsWith('@') ? username.slice(1) : username}</p>
+                              <p className="text-[10px] text-gray-400">{tiktokProfile.followers || "110"} followers</p>
                             </div>
                           </div>
                         </motion.div>
@@ -487,10 +473,14 @@ export default function App() {
                         <div className="flex flex-col items-center mb-2">
                           <div className="w-16 h-16 rounded-full overflow-hidden border-2 border-white shadow-md bg-gray-100 mb-1">
                             <img 
-                              src={tiktokProfile.avatar} 
+                              src={getProxyUrl(tiktokProfile.avatar)} 
                               alt={tiktokProfile.nickname}
                               referrerPolicy="no-referrer"
                               className="w-full h-full object-cover"
+                              onError={(e) => {
+                                (e.target as HTMLImageElement).src = `https://ui-avatars.com/api/?name=${encodeURIComponent(tiktokProfile.nickname)}&background=FE2C55&color=fff&size=128`;
+                                (e.target as HTMLImageElement).onerror = null;
+                              }}
                             />
                           </div>
                           <p className="font-bold text-lg text-gray-900">{tiktokProfile.nickname}</p>
