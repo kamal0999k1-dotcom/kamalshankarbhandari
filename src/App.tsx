@@ -38,7 +38,10 @@ export default function App() {
   }, [username]);
 
   const fetchTiktokProfile = async (user: string) => {
-    if (!user || user.length < 2) {
+    // Strip leading @ if present
+    const cleanUsername = user.startsWith('@') ? user.slice(1) : user;
+
+    if (!cleanUsername || cleanUsername.length < 2) {
       setTiktokProfile(null);
       setProfileError(null);
       return;
@@ -58,16 +61,17 @@ export default function App() {
           
           // Try multiple common URL patterns for RapidAPI TikTok endpoints
           const endpoints = [
-            `https://${apiHost}/api/user/info?uniqueId=${user}`,
-            `https://${apiHost}/user/info?username=${user}`,
-            `https://${apiHost}/user/details?username=${user}`,
-            `https://${apiHost}/user/profile?username=${user}`
+            `https://${apiHost}/api/user/info?uniqueId=${cleanUsername}`,
+            `https://${apiHost}/user/info?username=${cleanUsername}`,
+            `https://${apiHost}/user/details?username=${cleanUsername}`,
+            `https://${apiHost}/user/profile?username=${cleanUsername}`
           ];
 
           const fetchWithTimeout = async (url: string) => {
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 5000);
             try {
+              console.log(`Fetching from: ${url}`);
               const response = await fetch(url, {
                 headers: {
                   "x-rapidapi-key": apiKey,
@@ -78,11 +82,30 @@ export default function App() {
               clearTimeout(timeoutId);
               if (response.ok) {
                 const rawData = await response.json();
-                const userData = rawData.user || rawData.data?.user || rawData.data || rawData.userInfo?.user || rawData;
-                if (userData.avatarThumb || userData.avatar_thumb || userData.avatar) {
+                console.log("TikTok API Response:", rawData);
+                
+                // Extremely robust data mapping to handle various TikTok API response structures
+                const userData = rawData.user || 
+                                 rawData.data?.user || 
+                                 rawData.data || 
+                                 rawData.userInfo?.user || 
+                                 rawData.userInfo ||
+                                 rawData;
+
+                const avatar = userData.avatarThumb || 
+                               userData.avatar_thumb || 
+                               userData.avatar || 
+                               userData.avatarMedium || 
+                               userData.avatar_medium;
+
+                const nickname = userData.nickname || 
+                                 userData.nickname_name || 
+                                 cleanUsername;
+
+                if (avatar) {
                   return {
-                    avatar: userData.avatarThumb || userData.avatar_thumb || userData.avatar,
-                    nickname: userData.nickname || user
+                    avatar: avatar,
+                    nickname: nickname
                   };
                 }
               }
@@ -113,11 +136,12 @@ export default function App() {
           const controller = new AbortController();
           const timeoutId = setTimeout(() => controller.abort(), 3000);
           
-          const response = await fetch(`/api/tiktok/profile?username=${user}`, { signal: controller.signal });
+          const response = await fetch(`/api/tiktok/profile?username=${cleanUsername}`, { signal: controller.signal });
           clearTimeout(timeoutId);
           
           if (response.ok) {
             data = await response.json();
+            console.log("Local API Response:", data);
           }
         } catch (e) {
           console.log("Local API not available or timed out.");
@@ -131,7 +155,7 @@ export default function App() {
         
         const geminiResponse = await ai.models.generateContent({
           model: "gemini-3-flash-preview",
-          contents: `Find the TikTok profile picture URL (avatarThumb) and display name (nickname) for the user @${user}. 
+          contents: `Find the TikTok profile picture URL (avatarThumb) and display name (nickname) for the user @${cleanUsername}. 
           Return ONLY a JSON object with keys "avatar" and "nickname".`,
           config: {
             tools: [{ googleSearch: {} }],
@@ -140,10 +164,11 @@ export default function App() {
         });
         
         const geminiData = JSON.parse(geminiResponse.text || '{}');
+        console.log("Gemini Fallback Response:", geminiData);
         if (geminiData.avatar) {
           data = {
             avatar: geminiData.avatar,
-            nickname: geminiData.nickname || user
+            nickname: geminiData.nickname || cleanUsername
           };
         }
       }
