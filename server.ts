@@ -55,8 +55,9 @@ async function startServer() {
       
       const fetchWithTimeout = async (url: string) => {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 4000); // Reduced to 4s for faster failure/success
+        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s per individual fetch
         try {
+          console.log(`Fetching profile from: ${url}`);
           const response = await fetch(url, {
             method: "GET",
             headers: {
@@ -68,14 +69,21 @@ async function startServer() {
           clearTimeout(timeoutId);
           if (response.ok) {
             const data = await response.json();
+            console.log(`Success from ${url}`);
             // Check if data is valid and has some user info
             if (data && (data.user || data.data || data.userInfo || data.avatarThumb || data.nickname)) {
               return data;
             }
+            // Check for common error fields in 200 responses
+            if (data && (data.error || data.message || data.msg || data.code !== undefined)) {
+              console.log(`API returned 200 but with error in body from ${url}:`, data.error || data.message || data.msg);
+            }
           }
+          console.log(`Failed response from ${url}: ${response.status}`);
           throw new Error("Failed");
-        } catch (e) {
+        } catch (e: any) {
           clearTimeout(timeoutId);
+          console.log(`Error/Timeout fetching from ${url}: ${e.message}`);
           throw e;
         }
       };

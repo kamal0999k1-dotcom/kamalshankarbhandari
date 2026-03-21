@@ -19,6 +19,7 @@ export default function App() {
   const [tiktokProfile, setTiktokProfile] = useState<{ avatar: string, nickname: string, followers?: string } | null>(null);
   const [isFetchingProfile, setIsFetchingProfile] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
+  const [activeController, setActiveController] = useState<AbortController | null>(null);
   const [transactions, setTransactions] = useState([
     { id: 1, title: 'LIVE rewards', date: '1/4/2026 19:45:36', amount: 1.05, type: 'in', details: { status: 'Complete', method: 'TikTok', fee: 0.01, arrival: 'Instant', txId: 'TXN-99887766' } }
   ]);
@@ -48,13 +49,20 @@ export default function App() {
     setIsFetchingProfile(true);
     setProfileError(null);
     
+    // Cancel any previous active request
+    if (activeController) {
+      activeController.abort();
+    }
+    
+    const controller = new AbortController();
+    setActiveController(controller);
+    
     try {
       let data = null;
       
       // 1. Try the local server API (Optimized for speed)
       try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 6000); // 6s timeout for the whole request
+        const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout for the whole request
         
         const response = await fetch(`/api/tiktok/profile?username=${encodeURIComponent(user)}`, { signal: controller.signal });
         clearTimeout(timeoutId);
@@ -65,9 +73,15 @@ export default function App() {
           const errData = await response.json();
           setProfileError(errData.error || "User not found");
         }
-      } catch (e) {
-        console.log("Local API error or timeout");
-        setProfileError("Search timed out. Try again.");
+      } catch (e: any) {
+        if (e.name === 'AbortError') {
+          console.log("Request aborted (new search or timeout)");
+          // If it was a timeout (not a manual abort from a new search), show error
+          // We can check if the controller is still the active one
+          return; // Don't set error for aborted requests
+        }
+        console.error("Local API error:", e);
+        setProfileError("Search timed out or failed. Try again.");
       }
 
       if (data && data.avatar) {
