@@ -77,7 +77,10 @@ export default function App() {
         
         // Build URL using the host variable, ensuring https://
         const baseUrl = apiHost.startsWith('http') ? apiHost : `https://${apiHost}`;
-        const apiUrl = `${baseUrl}/user/info?unique_id=${encodeURIComponent(user)}`;
+        
+        // Use the specific path for tiktok-api23.p.rapidapi.com if that's the host
+        const endpoint = apiHost.includes('tiktok-api23') ? '/api/user/info' : '/user/info';
+        const apiUrl = `${baseUrl}${endpoint}?unique_id=${encodeURIComponent(user)}`;
         
         console.log(`Fetching from: ${apiUrl}`);
 
