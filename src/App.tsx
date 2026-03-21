@@ -50,23 +50,8 @@ export default function App() {
     try {
       let data = null;
       
-      // 1. Try the local server API first (works in AI Studio / VPS)
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s timeout for local API
-        
-        const response = await fetch(`/api/tiktok/profile?username=${user}`, { signal: controller.signal });
-        clearTimeout(timeoutId);
-        
-        if (response.ok) {
-          data = await response.json();
-        }
-      } catch (e) {
-        console.log("Local API not available or timed out, trying fallbacks...");
-      }
-
-      // 2. If local API failed, try direct RapidAPI call (if VITE_ key is provided in Netlify)
-      if (!data && import.meta.env.VITE_X_RAPIDAPI_KEY) {
+      // 1. Try direct RapidAPI call first (preferred for static hosts like Vercel/Netlify)
+      if (import.meta.env.VITE_X_RAPIDAPI_KEY) {
         try {
           const apiHost = import.meta.env.VITE_X_RAPIDAPI_HOST || "tiktok-scraper7.p.rapidapi.com";
           const apiKey = import.meta.env.VITE_X_RAPIDAPI_KEY;
@@ -122,10 +107,27 @@ export default function App() {
         }
       }
 
-      // 3. Final Fallback: Gemini (works on Netlify with GEMINI_API_KEY)
+      // 2. Fallback to local server API (if available)
       if (!data) {
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 3000);
+          
+          const response = await fetch(`/api/tiktok/profile?username=${user}`, { signal: controller.signal });
+          clearTimeout(timeoutId);
+          
+          if (response.ok) {
+            data = await response.json();
+          }
+        } catch (e) {
+          console.log("Local API not available or timed out.");
+        }
+      }
+
+      // 3. Final Fallback: Gemini (works with VITE_GEMINI_API_KEY)
+      if (!data && import.meta.env.VITE_GEMINI_API_KEY) {
         console.log("Falling back to Gemini for profile lookup...");
-        const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+        const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
         
         const geminiResponse = await ai.models.generateContent({
           model: "gemini-3-flash-preview",
